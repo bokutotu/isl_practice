@@ -1,1 +1,4 @@
--Iisl/include
+clang
+%c -std=c99
+%cpp -std=23
+-I./isl/include/
