@@ -1,94 +1,129 @@
 #include <stdio.h>
 #include <stdlib.h>
+
 #include <isl/ctx.h>
-#include <isl/set.h>
 #include <isl/union_set.h>
+#include <isl/union_map.h>
 #include <isl/schedule.h>
-#include <isl/ast.h>
-#include <isl/ast_build.h>
+#include <isl/schedule_node.h>
+#include <isl/space.h>
 #include <isl/val.h>
+#include <isl/val.h>
+#include <isl/aff.h>
+#include <isl/printer.h>
 
-/* バンド(ループバンド)に対してタイル化を行うヘルパー関数 */
-static isl_schedule_node *tileBand(isl_schedule_node *node, int Ti, int Tj) {
-    // node は band ノードであることを想定
-    isl_ctx *ctx = isl_schedule_node_get_ctx(node);
-
-    // タイルサイズを isl_multi_val に変換
-    // 2次元バンドの場合、[Ti, Tj] のように作成
-    isl_val *vTi = isl_val_int_from_si(ctx, Ti);
-    isl_val *vTj = isl_val_int_from_si(ctx, Tj);
-    isl_multi_val *tileSizes = isl_multi_val_zero(isl_schedule_node_band_get_space(node));
-    tileSizes = isl_multi_val_set_val(tileSizes, 0, vTi);
-    tileSizes = isl_multi_val_set_val(tileSizes, 1, vTj);
-
-    // バンドにタイル化を適用
-    node = isl_schedule_node_band_tile(node, tileSizes);
-
-    return node;
+// エラーチェックと終了を行うヘルパー関数
+static void check_pointer(void *ptr, const char *msg, isl_ctx *ctx) {
+    if (!ptr) {
+        fprintf(stderr, "Error: %s\n", msg);
+        if (ctx) {
+             isl_ctx_free(ctx);
+        }
+        exit(EXIT_FAILURE);
+    }
 }
 
-int main(void)
-{
-    // (1) ISL コンテキストの生成
+int main() {
     isl_ctx *ctx = isl_ctx_alloc();
+    check_pointer(ctx, "Failed to allocate isl_ctx", NULL);
 
-    // 例として、パラメータN, Mを持つ 2重ループ領域
-    // [N, M] -> { [i, j] : 0 <= i < N and 0 <= j < M }
-    const char *domainStr = "[N, M] -> { [i, j] : 0 <= i < N and 0 <= j < M }";
+    // 1. ドメインの作成
+    const char *domain_str = "{ S[i,j] : 0 <= i, j < 100 }";
+    isl_union_set *domain = isl_union_set_read_from_str(ctx, domain_str);
+    check_pointer(domain, "Failed to create domain", ctx);
 
-    // (2) 反復領域(Iteration Domain) の作成
-    isl_set *domain = isl_set_read_from_str(ctx, domainStr);
+    // 2. スケジュールの作成 (まずドメインから)
+    isl_schedule *schedule = isl_schedule_from_domain(isl_union_set_copy(domain)); // ドメインをコピー
+    check_pointer(schedule, "Failed to create schedule from domain", ctx);
 
-    // パラメータ N, M をある具体的な値で固定したい場合は、以下のように設定する
-    //   例: N=64, M=128
-    //   isl_set *paramSet = isl_set_read_from_str(ctx, "{ : N=64 and M=128 }");
-    //   domain = isl_set_intersect_params(domain, paramSet);
-    // ここではあえてシンボリックなままとしておきます
+    // --- ★ バンドノードを挿入 ---
+    // スケジュールマップを作成: S[i,j] -> [i,j]
+    const char *schedule_map_str = "{ S[i,j] -> [i,j] }";
+    isl_union_map *schedule_map = isl_union_map_read_from_str(ctx, schedule_map_str);
+    check_pointer(schedule_map, "Failed to create schedule map", ctx);
 
-    // (3) ドメインから初期スケジュールを生成（identity スケジュール）
-    //     identity スケジュール = i, j という順序でイテレーションする単純なもの
-    isl_union_set *domainUnion = isl_union_set_from_set(domain);
-    isl_schedule *schedule = isl_schedule_from_domain(domainUnion);
+    // スケジュールマップを multi_union_pw_aff に変換
+    // isl_multi_union_pw_aff_from_union_map は schedule_map の所有権を取る
+    isl_multi_union_pw_aff *mupa = isl_multi_union_pw_aff_from_union_map(schedule_map);
+    check_pointer(mupa, "Failed to convert schedule map to multi_union_pw_aff", ctx);
 
-    // (4) Schedule のルートノードを取り出す -> バンドノードをタイル化
+    // スケジュールに部分スケジュール (バンド) を挿入
+    // isl_schedule_insert_partial_schedule は schedule と mupa の所有権を取り、新しい schedule を返す
+    schedule = isl_schedule_insert_partial_schedule(schedule, mupa);
+    check_pointer(schedule, "Failed to insert partial schedule (band)", ctx);
+
+    // 3. ルートノード取得
     isl_schedule_node *root = isl_schedule_get_root(schedule);
+    check_pointer(root, "Failed to get schedule root node", ctx);
 
-    // バンドノードを探す（シンプルな場合は root が即バンドノードなことが多い）
-    // ただし実際にはフィルターノードなどが入っている場合があるため、必要に応じて
-    // isl_schedule_node_get_child() をたどることがある
-    //
-    // ここでは単純化のため、root がバンドノードであると仮定
-    // （実際にはチェックや必要に応じたトラバースを行う必要があります）
-    if (isl_schedule_node_get_type(root) == isl_schedule_node_band) {
-        // タイルサイズを仮に (Ti=32, Tj=32) とする
-        root = tileBand(root, 32, 32);
-    } else {
-        fprintf(stderr, "Error: Root node is not a band node.\n");
+    // 4. タイリング対象のバンドノード取得 (ドメインのすぐ下、挿入されたバンド)
+    isl_schedule_node *band_node_orig = isl_schedule_node_child(root, 0); // root は変更されない
+    check_pointer(band_node_orig, "Failed to get band node (after insertion)", ctx);
+    // band_node_orig の所有権を持つ
+
+    // --- ノードタイプの確認 (デバッグ用) ---
+    enum isl_schedule_node_type node_type = isl_schedule_node_get_type(band_node_orig);
+    if (node_type != isl_schedule_node_band) {
+         fprintf(stderr, "Error: Node at child 0 is not a band node (type: %d)\n", node_type);
+         // リソース解放処理
+         isl_schedule_node_free(band_node_orig);
+         isl_schedule_node_free(root);
+         isl_schedule_free(schedule);
+         isl_union_set_free(domain);
+         isl_ctx_free(ctx);
+         return 1;
     }
 
-    // タイル化したノードをスケジュールに戻す
-    schedule = isl_schedule_set_root(schedule, root);
+    // 5. タイルサイズを作成
+    isl_space *band_space = isl_schedule_node_band_get_space(band_node_orig);
+    check_pointer(band_space, "Failed to get band space", ctx);
+    isl_multi_val *tile_sizes = isl_multi_val_zero(band_space); // band_space の所有権は tile_sizes に移る
+    check_pointer(tile_sizes, "Failed to create multi_val for tile sizes", ctx);
 
-    // (5) タイル化したスケジュールから AST(抽象構文木) を生成
-    //     まずはコンテキスト（パラメータなど）から isl_ast_build を作成
-    isl_set *context = isl_set_read_from_str(ctx, "[N, M] -> { : }"); // 空制約 (N, M は未定義)
-    isl_ast_build *build = isl_ast_build_from_context(context);
+    isl_val *v32 = isl_val_int_from_si(ctx, 32);
+    check_pointer(v32, "Failed to create isl_val from int 32", ctx);
 
-    // スケジュール全体をノード (ast_node) に落とし込む
-    isl_ast_node *ast_node = isl_ast_build_node_from_schedule(build, schedule);
+    tile_sizes = isl_multi_val_set_val(tile_sizes, 0, isl_val_copy(v32));
+    check_pointer(tile_sizes, "Failed to set tile size for dim 0", ctx);
+    tile_sizes = isl_multi_val_set_val(tile_sizes, 1, v32); // v32の所有権を渡す
+    check_pointer(tile_sizes, "Failed to set tile size for dim 1", ctx);
 
-    // (6) 生成した AST(抽象構文木) を C コードとして文字列出力
-    char *codeStr = isl_ast_node_to_C_str(ast_node);
-    if (codeStr) {
-        printf("Generated Tiled Code:\n");
-        printf("%s\n", codeStr);
-        free(codeStr);
+    // 6. バンドノードをタイル化
+    // isl_schedule_node_band_tile は band_node_orig と tile_sizes の所有権を取る
+    isl_schedule_node *tiled_node = isl_schedule_node_band_tile(band_node_orig, tile_sizes);
+    if (!tiled_node) {
+        fprintf(stderr, "Failed to tile the schedule node band\n");
+        // エラー発生時、band_node_origとtile_sizesは消費されたと仮定
+        isl_schedule_node_free(root);
+        isl_schedule_free(schedule);
+        isl_union_set_free(domain);
+        isl_ctx_free(ctx);
+        return 1;
     }
+    // band_node_orig と tile_sizes は消費された
 
-    // 後処理
-    isl_ast_node_free(ast_node);
-    isl_ast_build_free(build);
+    // 7. タイリングされた新しいスケジュールを取得
+    isl_schedule *tiled_schedule = isl_schedule_node_get_schedule(tiled_node); // tiled_node は変更されない
+    check_pointer(tiled_schedule, "Failed to get tiled schedule from node", ctx);
+
+    // 8. 結果のスケジュールを表示
+    printf("Original Schedule (with band inserted):\n");
+    isl_printer *p = isl_printer_to_file(ctx, stdout);
+    check_pointer(p, "Failed to create printer", ctx);
+    p = isl_printer_set_output_format(p, ISL_FORMAT_ISL);
+    p = isl_printer_print_schedule(p, schedule);
+    printf("\n\nTiled Schedule:\n");
+    p = isl_printer_print_schedule(p, tiled_schedule);
+    p = isl_printer_flush(p);
+    isl_printer_free(p);
+
+    // 9. リソースの解放
+    isl_schedule_node_free(tiled_node);
+    isl_schedule_node_free(root);
     isl_schedule_free(schedule);
+    isl_schedule_free(tiled_schedule);
+    isl_union_set_free(domain);
+
     isl_ctx_free(ctx);
 
     return 0;
