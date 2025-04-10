@@ -7,6 +7,7 @@
 #include <isl/ast_build.h>
 #include <isl/printer.h>
 #include <isl/set.h>
+#include <isl/union_set.h>
 
 int main(void) {
     // ISL コンテキストの作成
@@ -68,4 +69,3 @@ int main(void) {
 
     return 0;
 }
-
