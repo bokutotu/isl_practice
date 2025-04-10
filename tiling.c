@@ -1,71 +1,101 @@
 #include <stdio.h>
 #include <stdlib.h>
-
 #include <isl/ctx.h>
-#include <isl/ast.h>
-#include <isl/schedule.h>
-#include <isl/ast_build.h>
-#include <isl/printer.h>
 #include <isl/set.h>
 #include <isl/union_set.h>
+#include <isl/map.h>
+#include <isl/union_map.h>
+#include <isl/schedule.h>
+#include <isl/schedule_node.h>
+#include <isl/ast.h>
+#include <isl/ast_build.h>
+#include <isl/val.h>
 
-int main(void) {
-    // ISL コンテキストの作成
+/* バンド(ループバンド)に対してタイル化を行うヘルパー関数 */
+static isl_schedule_node *tileBand(isl_schedule_node *node, int Ti, int Tj) {
+    isl_ctx *ctx = isl_schedule_node_get_ctx(node);
+
+    // タイルサイズを isl_multi_val に変換 (2次元バンド想定)
+    isl_val *vTi = isl_val_int_from_si(ctx, Ti);
+    isl_val *vTj = isl_val_int_from_si(ctx, Tj);
+
+    // band の空間を取得
+    isl_space *space = isl_schedule_node_band_get_space(node);
+    isl_multi_val *tileSizes = isl_multi_val_zero(space);
+    tileSizes = isl_multi_val_set_val(tileSizes, 0, vTi);
+    tileSizes = isl_multi_val_set_val(tileSizes, 1, vTj);
+
+    // バンドにタイル化を適用
+    node = isl_schedule_node_band_tile(node, tileSizes);
+
+    return node;
+}
+
+int main(void)
+{
     isl_ctx *ctx = isl_ctx_alloc();
-    if (!ctx) {
-        fprintf(stderr, "Error allocating ISL context\n");
-        return 1;
+
+    // (A) ドメイン (例: [N,M] -> { [i,j]: 0<=i<N && 0<=j<M })
+    const char *domainStr = "[N, M] -> { [i, j] : 0 <= i < N and 0 <= j < M }";
+    isl_set *domain = isl_set_read_from_str(ctx, domainStr);
+    isl_union_set *domainUnion = isl_union_set_from_set(domain);
+
+    // (B) ドメイン全体のユニバースをとり、その Identity マップ(= i->i, j->j)を作る
+    //     これはループ変数(i, j)をそのまま使う「単純なスケジュール」を表す。
+    isl_union_set *domainUniverse = isl_union_set_universe(isl_union_set_copy(domainUnion));
+    isl_union_map *identityUMap = isl_union_map_identity(domainUniverse);
+    // これで [i,j] -> [i,j] という変換が定義される(バンド2次元)
+
+    // (C) スケジュール生成
+    //     from_domain_and_schedule(domain, identityUMap) により
+    //     「domain → band(2次元)」のスケジュールツリーが作られる
+    isl_schedule *schedule = isl_schedule_from_domain_and_schedule(
+        isl_union_set_copy(domainUnion),
+        identityUMap
+    );
+
+    // (D) スケジュールのルートノードを取得
+    isl_schedule_node *node = isl_schedule_get_root(schedule);
+
+    // デバッグ用: スケジュールツリー構造をダンプ
+    // isl_schedule_node_dump(node);
+
+    // domain ノードを取得し、子どもを見る
+    if (isl_schedule_node_get_type(node) == isl_schedule_node_domain) {
+        // 通常ここは domain → band という階層になっている
+        node = isl_schedule_node_get_child(node, 0);
     }
 
-    // 反復変数 i のループを表す整数集合の定義
-    // 例: n がパラメータのとき、0 <= i < n のループ
-    isl_set *domain = isl_set_read_from_str(ctx, "[n] -> { S[i] : 0 <= i < n }");
-    if (!domain) {
-        fprintf(stderr, "Error reading ISL set from string\n");
-        isl_ctx_free(ctx);
-        return 1;
+    // ここで band のはず
+    if (isl_schedule_node_get_type(node) != isl_schedule_node_band) {
+        fprintf(stderr, "Error: Did not find a band node.\n");
+        goto cleanup;
     }
 
-    // isl_schedule_from_domain() は isl_union_set を要求するので変換する
-    isl_union_set *domain_us = isl_union_set_from_set(domain);
+    // タイル化
+    node = tileBand(node, 32, 32);
 
-    // 与えられた反復空間に対するスケジュールを生成
-    isl_schedule *schedule = isl_schedule_from_domain(domain_us);
-    if (!schedule) {
-        fprintf(stderr, "Error creating schedule from domain\n");
-        isl_ctx_free(ctx);
-        return 1;
+    // タイル化したノードをスケジュールに反映
+    schedule = isl_schedule_set_root(schedule, node);
+
+    // (E) AST 化して C コード生成
+    isl_set *context = isl_set_read_from_str(ctx, "[N, M] -> { : }");
+    isl_ast_build *build = isl_ast_build_from_context(context);
+    isl_ast_node *ast_node = isl_ast_build_node_from_schedule(build, schedule);
+    char *codeStr = isl_ast_node_to_C_str(ast_node);
+    if (codeStr) {
+        printf("Generated Tiled Code:\n");
+        printf("%s\n", codeStr);
+        free(codeStr);
     }
 
-    // AST ビルドオブジェクトの作成
-    isl_ast_build *ast_build = isl_ast_build_alloc(ctx);
-    if (!ast_build) {
-        fprintf(stderr, "Error allocating AST build\n");
-        isl_schedule_free(schedule);
-        isl_ctx_free(ctx);
-        return 1;
-    }
-
-    // スケジュールから AST（ループの内部表現）を構築する
-    isl_ast_node *root = isl_ast_build_node_from_schedule(ast_build, schedule);
-    if (!root) {
-        fprintf(stderr, "Error building AST from schedule\n");
-        isl_ast_build_free(ast_build);
-        isl_ctx_free(ctx);
-        return 1;
-    }
-
-    // isl_printer を利用して AST を C コード形式で出力する
-    isl_printer *printer = isl_printer_to_file(ctx, stdout);
-    printer = isl_printer_set_output_format(printer, ISL_FORMAT_C);
-    printer = isl_printer_print_ast_node(printer, root);
-    printf("\n");
-
-    // 後始末
-    isl_printer_free(printer);
-    isl_ast_node_free(root);
-    isl_ast_build_free(ast_build);
+cleanup:
+    // 後処理
+    isl_ast_node_free(ast_node);
+    isl_ast_build_free(build);
+    isl_schedule_free(schedule);
+    isl_union_set_free(domainUnion);
     isl_ctx_free(ctx);
-
     return 0;
 }
+

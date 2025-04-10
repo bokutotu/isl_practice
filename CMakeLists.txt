@@ -24,6 +24,14 @@ target_link_libraries(tiling PRIVATE
     gmp
 )
 
+add_executable(tiling_2d tiling_2d.c)
+add_dependencies(tiling_2d isl_external)
+target_include_directories(tiling_2d PRIVATE ${ISL_INCLUDE_DIR})
+target_link_libraries(tiling_2d PRIVATE
+    ${ISL_LIBRARY_DIR}/libisl.a
+    gmp
+)
+
 add_executable(generate_fixed_loop generate_fixed_loop.c)
 add_dependencies(generate_fixed_loop isl_external)
 target_include_directories(generate_fixed_loop PRIVATE ${ISL_INCLUDE_DIR})

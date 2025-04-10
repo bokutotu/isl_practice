@@ -1,3 +1,0 @@
-[submodule "isl"]
-	path = isl
-	url = git@github.com:bokutotu/isl.git
