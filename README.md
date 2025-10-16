@@ -49,7 +49,8 @@ uv sync
 - **Problem 3-2: Tile 空間の探索**  
   `isl_multi_val` を用いたタイルサイズ指定と、`isl_schedule_band_tile` によるタイル化。大きすぎるタイルでメモリ帯域を圧迫する失敗例を作り、`isl_ast_build_get_schedule_tiling_sizes` を用いた動的調整案を検討。
 - **Problem 3-3: Fusion / Fission の制御**  
-  `isl_schedule_node_band_fuse` と `isl_schedule_node_insert_sequence` を使い、依存を壊さずにスケジュール木を合成/分解。fusion 後にワープが発生するパターンを再現して isl の警告不足を指摘。
+  `isl_schedule_node_band_fuse` と `isl_schedule_node_insert_sequence` を使い、依存を壊さずにスケジュール木を合成/分解。fusion 後にワープが発生するパターンを再現して isl の警告不足を指摘。  
+  さらに、互いに同一の反復集合を持つが添え字記号が異なるループや、依存解析で合法性が証明できるケースをテストとして用意し、`isl_union_map_read_from_str` などで正規化したのちに融合できることを確認する予定。
 - **Problem 3-4: Vectorization-friendly Order の抽出**  
   `isl_schedule_node_band_member_get_coincident` と `isl_schedule_node_band_member_get_pe` を併用し、どの band が SIMD 対応かを整理。`isl` が stride-1 以外のメモリアクセスに弱い点を観察。
 

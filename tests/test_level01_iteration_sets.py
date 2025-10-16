@@ -39,7 +39,18 @@ class Level01IterationSetsTest(unittest.TestCase):
 
     def test_find_lexmin_point(self):
         domain = "{ [i, j] : 0 <= i < 3 and 0 <= j < 3 and i + j >= 2 }"
-        self.assertEqual((0, 2), lvl01.find_lexmin_point(domain))
+        point = lvl01.find_lexmin_point(domain)
+        self.assertIsInstance(point, isl.Point)
+        self.assertEqual(
+            0,
+            point.get_coordinate_val(isl.dim_type.set, 0).to_python(),
+            "辞書式最小点の i 座標が期待通りではありません",
+        )
+        self.assertEqual(
+            2,
+            point.get_coordinate_val(isl.dim_type.set, 1).to_python(),
+            "辞書式最小点の j 座標が期待通りではありません",
+        )
 
     def test_find_lexmin_point_empty(self):
         domain = "{ [i, j] : i > j and j > i }"
