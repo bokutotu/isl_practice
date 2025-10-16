@@ -1,0 +1,36 @@
+# Python caches & build artifacts
+__pycache__/
+*.py[oc]
+*.pyo
+*.whl
+*.egg-info/
+build/
+dist/
+wheels/
+
+# Test & coverage outputs
+.pytest_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+
+# Editor cruft
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# uv / virtual environments
+.uv/
+.venv/
+.python-version
+
+# Local binaries / experiments
+bin/
+*.log
