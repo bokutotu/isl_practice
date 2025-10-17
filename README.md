@@ -25,7 +25,7 @@ uv sync
 
 テンソルコンパイラ実装に必要な isl の使い方と限界を「問題形式」で押さえていきます。Level 01 はすでに `src/isl_practice/level01_iteration_sets.py` と `tests/test_level01_iteration_sets.py` で稼働中であり、ここから順に難度が上がっていく想定です。
 
-### **Level 01: 反復領域の基礎（全3問／実装済み）**
+### **Level 01: 反復領域の基礎（全3問）**
 - **Problem 1-1: canonical_intersection**  
   `{ [i, j] : ... }` 形式のテキストから `isl.Set` を構築し、`intersect` で共通部分を求めたのち `coalesce` などで正規化した文字列を返す。空集合で None を返すハンドリングにより「文字列表現 ↔ Set オブジェクト」の往復に慣れる。
 - **Problem 1-2: eliminate_dim**  
