@@ -1,10 +1,10 @@
 """
 Level 02 では、依存解析の基礎操作を isl で体験するための問題群を扱います。
 
-ここで定義する関数はすべて未実装（`return None`）のままです。テストが期待する
-振る舞いを参考に、`isl.UnionMap` や `isl.Schedule` の API を用いた本実装へと
-書き換えてください。各関数では順に、依存関係の構築、依存多面体の簡約、最小
-距離ベクトルの抽出、スケジュール合法性の検証を担う想定です。
+ここで扱う読み／書きアクセスはどちらも「反復 → メモリ位置」の写像です。RAW
+依存は「書いた反復 → 読む反復」を意味するので、`construct_flow_dependences` では
+`write_accesses` を反転してから `read_accesses` に合成し、Write→Read の向きを
+必ず守ってください。空集合を得た場合は None を返します。
 """
 
 from __future__ import annotations
@@ -22,10 +22,12 @@ def construct_flow_dependences(
 
     依存が存在しない場合は None を返してください。
     """
-    domain = isl.Set(iteration_domain)
-    read = isl.Map(read_accesses)
-    write = isl.Map(write_accesses)
-    return read.apply_range(write).apply_domain(domain)
+    read = isl.UnionMap(read_accesses)
+    write = isl.UnionMap(write_accesses)
+    deps = read.apply_range(write.reverse()).reverse()
+    if deps.is_empty():
+        return None
+    return deps.intersect_domain(isl.UnionSet(iteration_domain))
 
 
 def simplify_dependence_domain(dependences: isl.UnionMap) -> isl.UnionMap | None:
@@ -34,8 +36,10 @@ def simplify_dependence_domain(dependences: isl.UnionMap) -> isl.UnionMap | None
 
     空集合の場合は None を返してください。
     """
+    if dependences.is_empty():
+        return None
 
-    return None
+    return dependences.coalesce().detect_equalities()
 
 
 def compute_min_distance_vector(dependence: isl.Map) -> tuple[int, ...] | None:
@@ -44,8 +48,20 @@ def compute_min_distance_vector(dependence: isl.Map) -> tuple[int, ...] | None:
 
     有効な点が存在しない場合は None を返してください。
     """
+    if dependence.is_empty():
+        return None
 
-    return None
+    deltas = dependence.deltas()
+    if deltas.is_empty():
+        return None
+
+    point = deltas.lexmin().sample_point()
+    space = point.get_space()
+    dims = space.dim(isl.dim_type.set)
+    return tuple(
+        point.get_coordinate_val(isl.dim_type.set, i).to_python()
+        for i in range(dims)
+    )
 
 
 def validate_schedule_legality(
@@ -57,5 +73,42 @@ def validate_schedule_legality(
 
     判定不能な場合は None を返してください。
     """
+    theta = None
+    if isinstance(schedule, isl.Schedule):
+        theta = schedule.get_map()
+    elif isinstance(schedule, str):
+        theta = isl.UnionMap(schedule)
 
-    return None
+    # src -> time
+    theta_src = theta.intersect_domain(dependences.domain())
+    # dst -> time
+    theta_dst = theta.intersect_domain(dependences.range())
+
+    # dependences :: src -> dst
+    # ほしいのは、src_time -> dst_time
+    # theta_src :: src -> src_time
+    # theta_dst :: dst -> dst_time
+    # (src_time -> src) と、dependencesを合成すれば、src_time -> dstになる。
+    # src_time -> dstに dst -> dst_timeを合成すれば
+    # src_time -> dst_timeになる。
+    # apply_rangeは写像の合成と考えていい。
+    deps = theta_src.reverse().apply_range(dependences).apply_range(theta_dst)
+
+    deltas = deps.deltas()
+
+    if deltas.is_empty():
+        return None
+
+    min_vec = deltas.lexmin()
+    point = min_vec.sample_point()
+    space = point.get_space()
+    dims = space.dim(isl.dim_type.set)
+
+    for i in range(dims):
+        val = point.get_coordinate_val(isl.dim_type.set, i).to_python()
+        if val < 0:
+            return False
+        if val > 0:
+            return True
+
+    return False
