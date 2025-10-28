@@ -1,1 +1,1 @@
-./README.md
+read readme.md
